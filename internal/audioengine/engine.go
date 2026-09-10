@@ -220,9 +220,17 @@ func classifyProbeErr(stderr string, runErr error) error {
 	// purpose: "end of file" (a truncated transfer, not necessarily corrupt),
 	// "invalid argument" (an ffmpeg option / EINVAL, not a content signal), and
 	// "truncat" (also matches the recoverable "Truncating packet" warning).
+	//
+	// ffprobe's exact wording for "this isn't the media it claims to be" is
+	// version-dependent — different builds emit different phrases for the same
+	// garbage input — so match the common demuxer content-failures too. A demuxer
+	// that can't read a frame, or can't seek within the object, is looking at
+	// non-media data; here a seek failure is a content signal, not transport,
+	// because the presigned object URLs are range-capable.
 	invalid := []string{
 		"invalid data found", "moov atom not found", "could not find codec parameters",
 		"unknown format", "header missing",
+		"failed to read frame size", "could not seek to",
 	}
 	for _, m := range invalid {
 		if strings.Contains(s, m) {
