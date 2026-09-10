@@ -43,6 +43,11 @@ func TestTranscribeSegment_ValidatesWindowAndURL(t *testing.T) {
 	if _, err := s.TranscribeSegment(context.Background(), &audiov1.TranscribeSegmentRequest{NormalizedUrl: "https://x", StartMs: 100, EndMs: 100}); status.Code(err) != codes.InvalidArgument {
 		t.Errorf("end_ms<=start_ms must be InvalidArgument, got %v", err)
 	}
+	// A negative window start would rebase utterance offsets below the asset
+	// timeline (t < 0), so it must be rejected before transcription.
+	if _, err := s.TranscribeSegment(context.Background(), &audiov1.TranscribeSegmentRequest{NormalizedUrl: "https://x", StartMs: -1000, EndMs: 1000}); status.Code(err) != codes.InvalidArgument {
+		t.Errorf("negative start_ms must be InvalidArgument, got %v", err)
+	}
 }
 
 func TestTranscribeSegment_UnavailableWhenNoKey(t *testing.T) {

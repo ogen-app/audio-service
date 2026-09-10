@@ -43,10 +43,14 @@ that just burns CPU (also billed) chasing an already-tiny heap.
 
 ### `MEMORY_LIMIT_RATIO` — a safety net, not a cost lever
 
-This sets `GOMEMLIMIT`, a soft **ceiling** that prevents OOM; it does not reduce
-average usage, so it doesn't directly cut the bill. Key nuance: **`GOMEMLIMIT`
-governs only the Go heap — not the ffmpeg/ffprobe children**, which also count
-against the container cgroup. Leave room for them:
+This sets `GOMEMLIMIT`, a **soft limit on Go-runtime-managed memory** — the Go
+heap, runtime metadata, and goroutine stacks. As usage nears it the runtime GCs
+harder to stay under, which curbs Go-driven OOMs; it does not reduce average
+usage, so it doesn't directly cut the bill. Key nuance: **`GOMEMLIMIT` does not
+account for the ffmpeg/ffprobe child processes**, which count against the
+container cgroup independently — so it is **not a cgroup-wide OOM backstop**: a
+burst of children can still exhaust the remaining cgroup memory and trigger an
+OOM kill regardless of `GOMEMLIMIT`. Leave room for them:
 
 | Your Railway memory limit | Suggested ratio | Reasoning |
 |---|---|---|

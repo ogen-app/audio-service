@@ -85,20 +85,23 @@ func (e *Engine) Normalize(ctx context.Context, sourceURL, destPutURL string, ta
 	}
 	counter := &countingReader{r: stdout}
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("%w: start ffmpeg: %v", ErrNormalize, redactErr(err))
-	}
-
-	// The PUT body reads from the pipe until ffmpeg closes stdout (EOF). Content
-	// length is unknown up front (transcode is one-pass), so the request is
+	// Build the PUT request BEFORE starting ffmpeg: if destPutURL is malformed,
+	// NewRequestWithContext fails here — before any ffmpeg process exists — so a
+	// bad URL can't leave ffmpeg running with nobody draining its stdout pipe,
+	// which would block cmd.Wait() until the normalization timeout. The body
+	// (counter over the pipe) is only read once Do runs, after Start.
+	// Content length is unknown up front (one-pass transcode), so the request is
 	// chunked — the -1 length signals that to net/http.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, destPutURL, counter)
 	if err != nil {
-		_ = cmd.Wait()
 		return nil, fmt.Errorf("%w: build PUT: %v", ErrNormalize, redactErr(err))
 	}
 	req.Header.Set("Content-Type", "audio/ogg")
 	req.ContentLength = -1 // unknown length → chunked transfer
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("%w: start ffmpeg: %v", ErrNormalize, redactErr(err))
+	}
 
 	resp, putErr := http.DefaultClient.Do(req)
 	if putErr != nil {

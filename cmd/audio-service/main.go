@@ -59,7 +59,11 @@ func main() {
 		logger.Error("init engine", "component", "boot", "err", err)
 		os.Exit(1)
 	}
-	defer engine.Close()
+	defer func() {
+		if err := engine.Close(); err != nil {
+			logger.Error("close engine", "component", "boot", "err", err)
+		}
+	}()
 
 	// The transcriber is key-optional: with no GEMINI_API_KEY, Probe/Normalize
 	// still serve and TranscribeSegment returns Unavailable until a key is set.
@@ -73,7 +77,8 @@ func main() {
 			"component", "boot")
 	}
 
-	lis, err := net.Listen("tcp", cfg.Listen)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", cfg.Listen)
 	if err != nil {
 		logger.Error("listen", "component", "boot", "addr", cfg.Listen, "err", err)
 		os.Exit(1)

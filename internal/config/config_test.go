@@ -13,7 +13,9 @@ func TestLoadDefaults(t *testing.T) {
 		"NORMALIZE_TIMEOUT", "TRANSCRIBE_TIMEOUT", "FFPROBE_PATH", "FFMPEG_PATH",
 		"TARGET_SAMPLE_RATE", "TRANSCRIBE_MODEL",
 	} {
-		os.Unsetenv(k)
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatalf("unset %s: %v", k, err)
+		}
 	}
 	c, err := Load()
 	if err != nil {

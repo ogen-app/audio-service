@@ -116,6 +116,12 @@ func (s *Server) TranscribeSegment(ctx context.Context, req *audiov1.TranscribeS
 	if url == "" {
 		return nil, status.Error(codes.InvalidArgument, "normalized_url is required")
 	}
+	// Reject a negative window start: SegmentCut clamps the seek to 0 but the
+	// original value is still used to rebase utterance offsets, which would push
+	// returned timestamps before the asset timeline (t < 0).
+	if req.GetStartMs() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "start_ms must be non-negative")
+	}
 	if req.GetEndMs() <= req.GetStartMs() {
 		return nil, status.Error(codes.InvalidArgument, "end_ms must be greater than start_ms")
 	}

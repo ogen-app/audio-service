@@ -63,12 +63,8 @@ jobs:
       # buf.build/ogen-app/proto contract (CON-220) — a drifted checkout means
       # someone bumped the contract without regenerating. Plugin versions are
       # pinned to those in the generated headers so regeneration is byte-identical.
-      #
-      # NOTE: audio.v1 (CON-282) is not yet published to BSR. Until PROTO_VERSION
-      # in the Makefile points at a release that includes audio.v1, `make proto`
-      # will fail to find the file — this job is therefore allowed to fail
-      # (continue-on-error) so the gate doesn't block on the unpublished contract.
-      # Remove continue-on-error once audio.v1 ships in a tagged proto release.
+      # audio.v1 is published (v1.2.0), so this gate is enforced: a drift or a
+      # `make proto` failure blocks build-push (which needs: this job).
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -79,7 +75,6 @@ jobs:
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - name: Verify generated code is up to date
-        continue-on-error: true
         run: |
           make proto
           if [ -n "$(git status --porcelain -- gen/)" ]; then
