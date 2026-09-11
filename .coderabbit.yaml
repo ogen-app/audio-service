@@ -1,0 +1,76 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit configuration for ogen-app/audio-service (CON-282). The default
+# branch carries this file so it applies as the base config on every PR.
+language: en-US
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+
+  # Generated protobuf stubs and build output are noise in review.
+  path_filters:
+    - "!gen/**"
+    - "!**/*.pb.go"
+    - "!go.sum"
+
+  # Repo-specific review guidance so CodeRabbit enforces this service's
+  # conventions rather than generic Go advice.
+  path_instructions:
+    - path: "internal/**/*.go"
+      instructions: >-
+        All application logging must go through log/slog (CON-107) — flag any
+        stdlib log.Print/Printf/Println calls (boot-time log.Fatal* in cmd/ is
+        the only exception). Structured logs should carry a "component" key.
+    - path: "internal/server/**/*.go"
+      instructions: >-
+        gRPC error mapping is load-bearing. Terminal content verdicts
+        (unsupported/corrupt container, zero-length, silent-throughout) must
+        return codes.InvalidArgument (no client retry). A normalization failure
+        must return codes.Internal (distinct ErrNormalize sentinel). Gemini
+        unavailable/5xx must be codes.Unavailable, rate-limit codes.
+        ResourceExhausted, deadlines codes.DeadlineExceeded — all transient so
+        the API retries. Flag any mapping that could reject a valid upload on a
+        transient fault, or hardcode the Gemini model (it must come from the
+        request field, never compiled in).
+    - path: "internal/audioengine/**/*.go"
+      instructions: >-
+        This package shells out to ffprobe/ffmpeg. Verify every exec.Command is
+        context-bound (exec.CommandContext), reads/writes the presigned URLs
+        directly (no whole-file buffering — Normalize must stream ffmpeg stdout
+        straight to the PUT), stderr/stdout buffers are capped, and the error
+        classifier stays conservative (only well-known content-corruption
+        markers are terminal).
+    - path: "internal/transcribe/**/*.go"
+      instructions: >-
+        This package calls Gemini multimodal. Offsets returned to the caller
+        must be rebased to the ORIGINAL asset timeline (segment start_ms + model
+        offset). Confidence is -1 when the model doesn't expose one. On garbled
+        or missing timestamps, fall back to the segment window bounds rather
+        than failing the segment. The model id must come from the request.
+    - path: "proto/**/*.proto"
+      instructions: >-
+        The audio.v1 contract is owned by ogen-app/proto (CON-220). Treat field
+        renumbering, type changes, or removals as breaking — the Ogen API
+        consumes a pinned copy.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    base_branches:
+      - main
+
+  tools:
+    golangci-lint:
+      enabled: true
+
+chat:
+  auto_reply: true
