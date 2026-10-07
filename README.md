@@ -91,7 +91,13 @@ See [MEMORY_TUNING.md](MEMORY_TUNING.md) for the Railway memory-cost knobs.
 ## Build & run
 
 The service shells out to **ffmpeg/ffprobe** (built with HTTPS support), so no
-CGO is needed. The Docker runtime image installs ffmpeg from Debian.
+CGO is needed. The Docker image builds a minimal **audio-only** ffmpeg/ffprobe
+from source (see the `ffmpeg` stage in the `Dockerfile`): common audio
+containers/codecs, the libopus encoder, WAV output, `silencedetect`, and HTTPS.
+Debian's full ffmpeg loads ~210 shared libraries per exec whose page cache
+stays charged to the container (see `MEMORY_TUNING.md`). Adding support for a
+new source format means adding its demuxer/decoder to the `configure` flags.
+Local tests use whatever ffmpeg is on `PATH` (the fixtures need `lavfi`).
 
 ```sh
 make proto                # regenerate gen/ from the pinned proto module

@@ -114,6 +114,10 @@ func (e *Engine) detectSilentThroughout(ctx context.Context, url string, duratio
 		"-hide_banner",
 		"-loglevel", "info", // silencedetect logs at info level
 		"-i", url,
+		// Audio only: a video track (screen recording, cover art) would otherwise
+		// be decoded and re-encoded into the null muxer for nothing — and the
+		// image's audio-only ffmpeg has no video codecs, so it would fail.
+		"-vn",
 		// -50 dB noise floor, and only count runs of >=0.5s as silence so brief
 		// gaps aren't summed into a false "silent throughout".
 		"-af", "silencedetect=noise=-50dB:d=0.5",

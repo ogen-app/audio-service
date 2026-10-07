@@ -73,6 +73,22 @@ runaway, and makes the derived `GOMEMLIMIT` meaningful.
   baseline — the only further lever there is architectural (fewer replicas, or not
   keeping it always-on), not these knobs.
 
+## Page cache: why the image builds its own ffmpeg
+
+Container memory metrics count the kernel **page cache** charged to the
+container's cgroup (`file` in `/sys/fs/cgroup/memory.stat`), not just process
+memory (`anon`). Every ffmpeg/ffprobe exec reads its binary and shared libraries
+through the page cache, and those pages stay cached until memory pressure
+evicts them — which never comes on a mostly-idle service. With Debian's ffmpeg
+package (~210 shared libraries, ~236 MB: x265, AV1, codec2, rsvg, ICU, …) the
+first burst left a permanent ~210 MB `file` plateau while `anon` sat at ~10 MB;
+no Go-side knob can release that.
+
+The image therefore builds an audio-only ffmpeg (the `ffmpeg` stage in the
+`Dockerfile`) whose binaries plus shared deps total ~17 MB, which bounds this
+cache. To diagnose a plateau, compare `anon` vs `file` in `memory.stat`: high
+`anon` is Go/children memory (the knobs above), high `file` is page cache.
+
 ## Note on transcription
 
 `TranscribeSegment` streams a **bounded** segment WAV (~5 min, capped at 64 MiB)

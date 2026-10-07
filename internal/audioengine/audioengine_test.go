@@ -57,6 +57,9 @@ func TestClassifyProbeErr(t *testing.T) {
 	if err := classifyProbeErr("moov atom not found", nil); !errors.Is(err, ErrInvalidAudio) {
 		t.Errorf("moov atom missing must be terminal, got %v", err)
 	}
+	if err := classifyProbeErr("[mp3 @ 0x1] Failed to find two consecutive MPEG audio frames.", nil); !errors.Is(err, ErrInvalidAudio) {
+		t.Errorf("non-mp3 bytes behind .mp3 must be terminal, got %v", err)
+	}
 	// Network faults are transient (NOT ErrInvalidAudio) so the API degrades.
 	if err := classifyProbeErr("Connection refused", nil); errors.Is(err, ErrInvalidAudio) {
 		t.Errorf("network fault must be transient, got %v", err)
