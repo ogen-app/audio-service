@@ -37,6 +37,11 @@ type Config struct {
 	// Hz. 16 kHz is the standard ASR rate and what TranscribeSegment expects; a
 	// Normalize request may override per-call (0 -> this default).
 	TargetSampleRate int `envconfig:"TARGET_SAMPLE_RATE" default:"16000"`
+	// TmpDir is where Normalize writes the derivative before uploading it with an
+	// explicit Content-Length. Files live only for one call (~30 MB/hour of audio)
+	// and are removed afterwards; ephemeral container disk is enough. Empty uses
+	// the OS default temp dir.
+	TmpDir string `envconfig:"AUDIO_SERVICE_TMP_DIR" default:""`
 	// GeminiAPIKey authenticates TranscribeSegment against the Gemini Developer
 	// API (the same key the Ogen embedder uses). Empty is tolerated at boot so
 	// Probe/Normalize still serve; TranscribeSegment then returns Unavailable.

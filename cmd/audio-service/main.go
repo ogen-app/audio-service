@@ -53,6 +53,7 @@ func main() {
 		NormalizeTimeout:  cfg.NormalizeTimeout,
 		TranscribeTimeout: cfg.TranscribeTimeout,
 		TargetSampleRate:  cfg.TargetSampleRate,
+		TmpDir:            cfg.TmpDir,
 		ScavengeOnIdle:    cfg.ScavengeOnIdle,
 	})
 	if err != nil {

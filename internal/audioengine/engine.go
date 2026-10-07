@@ -10,8 +10,9 @@
 //     sample-rate / container / codec) and a silencedetect pass classifies a
 //     silent-throughout / zero-length input.
 //   - Normalize — ffmpeg transcodes the source to mono @ target_sample_rate Opus
-//     and streams the ogg result straight to a presigned PUT. The whole file is
-//     never buffered (ffmpeg's stdout is piped to the HTTP request body).
+//     and uploads the ogg result to a presigned PUT. The derivative goes through
+//     a small temp file so the PUT carries an explicit Content-Length (presigned
+//     PUTs reject chunked uploads with 411).
 //   - SegmentCut — ffmpeg seek-cuts [start,end) from the normalized derivative
 //     into a bounded temp WAV for the transcriber (segments are short, ~5 min).
 //
@@ -65,6 +66,7 @@ type Engine struct {
 	normalizeTimeout  time.Duration
 	transcribeTimeout time.Duration
 	targetSampleRate  int
+	tmpDir            string
 	sem               chan struct{}
 
 	// scavengeOnIdle returns freed memory to the OS once the pool drains after a
@@ -86,7 +88,10 @@ type Config struct {
 	NormalizeTimeout  time.Duration
 	TranscribeTimeout time.Duration
 	TargetSampleRate  int
-	ScavengeOnIdle    bool
+	// TmpDir holds Normalize's transient derivative files; empty uses the OS
+	// default temp dir.
+	TmpDir         string
+	ScavengeOnIdle bool
 }
 
 // defaultTargetSampleRate is the mono ASR rate used when none is configured.
@@ -115,6 +120,7 @@ func New(cfg Config) (*Engine, error) {
 		normalizeTimeout:  orDuration(cfg.NormalizeTimeout, 30*time.Minute),
 		transcribeTimeout: orDuration(cfg.TranscribeTimeout, 10*time.Minute),
 		targetSampleRate:  orInt(cfg.TargetSampleRate, defaultTargetSampleRate),
+		tmpDir:            cfg.TmpDir,
 		sem:               make(chan struct{}, workers),
 		scavengeOnIdle:    cfg.ScavengeOnIdle,
 		scavengeFn:        debug.FreeOSMemory,

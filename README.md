@@ -19,7 +19,7 @@ presigned-URL based:
 | RPC | Does |
 |-----|------|
 | `Probe(source_url, filename)` | ffprobe range-reads the source; returns `duration_ms`, `channels`, `sample_rate`, `container`, `codec`, and a `silent` (silent-throughout / zero-length) verdict. Cheap; drives ogen's validation gate. |
-| `Normalize(source_url, dest_put_url, target_sample_rate)` | `ffmpeg -ac 1 -ar 16000 -c:a libopus -f ogg` transcodes the source and **streams** the result to a presigned PUT. Returns the derivative's metadata. Never buffers the whole file. |
+| `Normalize(source_url, dest_put_url, target_sample_rate)` | `ffmpeg -ac 1 -ar 16000 -c:a libopus -f ogg` transcodes the source to a temp file, then uploads it to a presigned PUT with an explicit `Content-Length` (presigned PUTs reject chunked uploads). Returns the derivative's metadata. The derivative is small (mono Opus, ~30 MB/hour) and the temp file is removed after each call. |
 | `TranscribeSegment(normalized_url, start_ms, end_ms, language_hint, model)` | Cuts `[start_ms, end_ms)` from the normalized derivative (ffmpeg range-read), transcribes it via **Gemini multimodal**, and returns utterances whose offsets are **rebased to the original asset timeline**, plus Gemini token usage. |
 
 All three read/write over HTTP directly (range-requesting only what they need),
@@ -77,6 +77,7 @@ Environment variables (no prefix, matching the Ogen API's style):
 | `FFPROBE_PATH` | `ffprobe` | ffprobe binary (name or path) |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary (name or path) |
 | `TARGET_SAMPLE_RATE` | `16000` | mono sample rate of the normalized derivative (Hz) |
+| `AUDIO_SERVICE_TMP_DIR` | (OS temp dir) | where `Normalize` writes the derivative before uploading; ephemeral disk is enough |
 | `GEMINI_API_KEY` | (unset) | Gemini Developer API key; empty ⇒ `TranscribeSegment` returns `Unavailable` |
 | `TRANSCRIBE_MODEL` | `gemini-2.5-flash` | **default** Gemini model id; the request's `model` field wins |
 | `AUDIO_SERVICE_GC_PERCENT` | `50` | GC target (GOGC); lower = smaller heap, more CPU. `<=0` keeps the runtime default |
