@@ -294,29 +294,57 @@ func TestProbe_InvalidContentIsTerminal(t *testing.T) {
 	}
 }
 
-func TestNormalizeEndToEnd_StreamsToPUT(t *testing.T) {
+// presignedPUTStub mimics S3/R2/GCS presigned PUT semantics: a chunked body (no
+// Content-Length) is rejected with 411 Length Required. It records the method and
+// the number of bytes received.
+type presignedPUTStub struct {
+	mu     sync.Mutex
+	method string
+	got    int64
+	calls  int
+	status int // response status for a well-formed upload; 0 means 200
+}
+
+func (s *presignedPUTStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.method = r.Method
+	if r.ContentLength <= 0 || len(r.TransferEncoding) > 0 {
+		w.WriteHeader(http.StatusLengthRequired)
+		return
+	}
+	s.got, _ = io.Copy(io.Discard, r.Body)
+	if s.status != 0 {
+		w.WriteHeader(s.status)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func requireEmptyDir(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read tmp dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("tmp dir not cleaned up: %d entries left (first %q)", len(entries), entries[0].Name())
+	}
+}
+
+func TestNormalizeEndToEnd_UploadsWithContentLength(t *testing.T) {
 	requireFFmpeg(t)
 	dir := t.TempDir()
 	src := filepath.Join(dir, "tone.wav")
 	genTone(t, src, 2)
 
-	// A stub PUT target that records how many bytes it received.
-	var mu sync.Mutex
-	var got int64
-	var method string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		method = r.Method
-		mu.Unlock()
-		n, _ := io.Copy(io.Discard, r.Body)
-		mu.Lock()
-		got = n
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
+	stub := &presignedPUTStub{}
+	srv := httptest.NewServer(stub)
 	defer srv.Close()
 
-	eng, err := New(Config{})
+	tmp := t.TempDir()
+	eng, err := New(Config{TmpDir: tmp})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -324,18 +352,69 @@ func TestNormalizeEndToEnd_StreamsToPUT(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
-	if method != http.MethodPut {
-		t.Errorf("upload method = %q, want PUT", method)
+	if stub.method != http.MethodPut {
+		t.Errorf("upload method = %q, want PUT", stub.method)
 	}
 	if res.SampleRate != 16000 || res.Channels != 1 {
 		t.Errorf("derivative meta = %dHz/%dch, want 16000/1", res.SampleRate, res.Channels)
 	}
-	if res.BytesWritten <= 0 || res.BytesWritten != got {
-		t.Errorf("bytes_written = %d, server received = %d", res.BytesWritten, got)
+	if res.BytesWritten <= 0 || res.BytesWritten != stub.got {
+		t.Errorf("bytes_written = %d, server received = %d", res.BytesWritten, stub.got)
 	}
 	if res.DurationMs < 1500 || res.DurationMs > 2500 {
 		t.Errorf("duration = %dms, want ~2000", res.DurationMs)
 	}
+	requireEmptyDir(t, tmp)
+}
+
+func TestNormalize_PUTFailureIsErrNormalizeAndCleansUp(t *testing.T) {
+	requireFFmpeg(t)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "tone.wav")
+	genTone(t, src, 1)
+
+	stub := &presignedPUTStub{status: http.StatusForbidden}
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	eng, err := New(Config{TmpDir: tmp})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_, err = eng.Normalize(context.Background(), src, srv.URL+"/normalized.opus?X-Amz-Signature=secret", 16000)
+	if !errors.Is(err, ErrNormalize) {
+		t.Fatalf("want ErrNormalize, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("error should carry the HTTP status: %v", err)
+	}
+	if strings.Contains(err.Error(), "secret") {
+		t.Errorf("error leaks presigned query: %v", err)
+	}
+	requireEmptyDir(t, tmp)
+}
+
+func TestNormalize_FFmpegFailureSkipsUploadAndCleansUp(t *testing.T) {
+	requireFFmpeg(t)
+	stub := &presignedPUTStub{}
+	srv := httptest.NewServer(stub)
+	defer srv.Close()
+
+	tmp := t.TempDir()
+	eng, err := New(Config{TmpDir: tmp})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	missing := filepath.Join(t.TempDir(), "missing.wav")
+	_, err = eng.Normalize(context.Background(), missing, srv.URL+"/normalized.opus", 16000)
+	if !errors.Is(err, ErrNormalize) {
+		t.Fatalf("want ErrNormalize, got %v", err)
+	}
+	if stub.calls != 0 {
+		t.Errorf("PUT issued %d time(s) after ffmpeg failure, want 0", stub.calls)
+	}
+	requireEmptyDir(t, tmp)
 }
 
 func TestSegmentCutEndToEnd(t *testing.T) {
