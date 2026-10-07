@@ -208,11 +208,11 @@ func mapEngineErr(err error) error {
 }
 
 // mapTranscribeErr classifies a Gemini transcription error. An unconfigured key
-// is Unavailable; HTTP 429 / 5xx map to ResourceExhausted / Unavailable
+// or a degenerate (token-capped) model reply is Unavailable; HTTP 429 / 5xx map to ResourceExhausted / Unavailable
 // (transient); a deadline surfaces as DeadlineExceeded. Anything else is
 // Internal.
 func mapTranscribeErr(err error) error {
-	if errors.Is(err, transcribe.ErrUnavailable) {
+	if errors.Is(err, transcribe.ErrUnavailable) || errors.Is(err, transcribe.ErrDegenerateOutput) {
 		return status.Error(codes.Unavailable, err.Error())
 	}
 	if errors.Is(err, context.DeadlineExceeded) {

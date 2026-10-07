@@ -139,3 +139,44 @@ func TestNew_EmptyKeyIsUnavailableNotError(t *testing.T) {
 		t.Error("empty key must yield an unavailable client")
 	}
 }
+
+func TestMaxOutputTokens_ScalesWithWindow(t *testing.T) {
+	cases := []struct {
+		startMs, endMs int64
+		want           int32
+	}{
+		{0, 18_356, 1024 + 40*19},   // the harvard.wav segment, rounded up to 19s
+		{10_000, 10_001, 1024 + 40}, // sub-second window still gets one second
+		{0, 300_000, 1024 + 40*300}, // a full 5-minute segment
+	}
+	for _, tc := range cases {
+		if got := maxOutputTokens(Segment{StartMs: tc.startMs, EndMs: tc.endMs}); got != tc.want {
+			t.Errorf("maxOutputTokens(%d..%d) = %d, want %d", tc.startMs, tc.endMs, got, tc.want)
+		}
+	}
+}
+
+func TestResponseSchema_BoundsOffsetsToWindow(t *testing.T) {
+	// Unbounded integer offsets let Gemini loop on digits until the token cap;
+	// both offsets must be bounded to [0, window length] and ordered first.
+	s := responseSchema(Segment{StartMs: 60_000, EndMs: 78_356})
+	item := s.Properties["utterances"].Items
+	for _, name := range []string{"start_ms", "end_ms"} {
+		p := item.Properties[name]
+		if p.Minimum == nil || *p.Minimum != 0 || p.Maximum == nil || *p.Maximum != 18_356 {
+			t.Errorf("%s bounds = [%v, %v], want [0, 18356]", name, p.Minimum, p.Maximum)
+		}
+	}
+	if len(item.PropertyOrdering) < 2 || item.PropertyOrdering[0] != "start_ms" || item.PropertyOrdering[1] != "end_ms" {
+		t.Errorf("timestamps must be ordered before text, got %v", item.PropertyOrdering)
+	}
+}
+
+func TestParseModelJSON_RejectsDigitLoop(t *testing.T) {
+	// The shape a looping model produced in production: an integer overflowing
+	// int64. It must be a parse error (-> ErrDegenerateOutput), not a value.
+	reply := `{"detected_language":"en","utterances":[{"text":"x","is_speech":true,"start_ms":6000000000000000000000000000}]}`
+	if _, err := parseModelJSON(reply); err == nil {
+		t.Fatal("overflowing start_ms must fail to parse")
+	}
+}

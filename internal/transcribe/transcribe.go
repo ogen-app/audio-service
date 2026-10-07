@@ -6,8 +6,9 @@
 //
 // Per the v1 decision there is no dedicated ASR backend, so per-utterance
 // offsets and confidence are model-reported and approximate. When the model
-// returns no/garbled timestamps for a segment the transcriber falls back to the
-// segment window bounds and marks confidence -1 (recorded as approximate).
+// returns no/zero timestamps for an utterance the transcriber falls back to the
+// segment window bounds and marks confidence -1 (recorded as approximate). A
+// reply that is not usable JSON at all is an error (ErrDegenerateOutput).
 package transcribe
 
 import (
@@ -24,6 +25,21 @@ import (
 // cannot run. The server maps it to codes.Unavailable (transient: a key can be
 // set without a restart).
 var ErrUnavailable = errors.New("transcribe: gemini api key not configured")
+
+// ErrDegenerateOutput is returned when Gemini's reply is unusable: it ran into
+// the output-token cap (in practice a repetition loop, never a real transcript
+// of a bounded segment) or is not valid JSON for the schema. It is transient (sampling is non-deterministic, so a retry usually succeeds);
+// the server maps it to codes.Unavailable.
+var ErrDegenerateOutput = errors.New("transcribe: model output hit the token cap (degenerate reply)")
+
+// Output budget for a segment, in model tokens. Even fast speech is ~4 text
+// tokens/s; the per-utterance JSON roughly triples that. 40 tok/s plus a fixed
+// floor is generous headroom while stopping a looping model in seconds rather
+// than letting it stream tens of thousands of tokens for minutes.
+const (
+	outputTokensBase      = 1024
+	outputTokensPerSecond = 40
+)
 
 // Client wraps a genai.Client for the Gemini Developer API backend.
 type Client struct {
@@ -101,10 +117,13 @@ func (c *Client) Transcribe(ctx context.Context, seg Segment) (*Result, error) {
 	}
 	contents := []*genai.Content{genai.NewContentFromParts(parts, genai.RoleUser)}
 
+	// Temperature is left at the model default: Gemini 3 models are tuned for
+	// 1.0, and at temperature 0 they cut the transcript short (observed: one
+	// utterance of a 6-sentence clip, end_ms dropped).
 	cfg := &genai.GenerateContentConfig{
 		ResponseMIMEType: "application/json",
-		ResponseSchema:   responseSchema(),
-		Temperature:      genai.Ptr[float32](0),
+		ResponseSchema:   responseSchema(seg),
+		MaxOutputTokens:  maxOutputTokens(seg),
 	}
 
 	resp, err := c.inner.Models.GenerateContent(ctx, seg.Model, contents, cfg)
@@ -113,17 +132,16 @@ func (c *Client) Transcribe(ctx context.Context, seg Segment) (*Result, error) {
 	}
 
 	in, out := usageTokens(resp)
+	if finishReason(resp) == genai.FinishReasonMaxTokens {
+		return nil, fmt.Errorf("%w: output_tokens=%d", ErrDegenerateOutput, out)
+	}
 	parsed, perr := parseModelJSON(resp.Text())
 	if perr != nil {
-		// The model replied but the JSON is unusable — fall back to a single
-		// approximate utterance spanning the whole segment window rather than
-		// failing the segment outright.
-		return &Result{
-			DetectedLanguage: "",
-			Utterances:       fallbackUtterances(seg),
-			InputTokens:      in,
-			OutputTokens:     out,
-		}, nil
+		// An unparseable reply is a model failure, not an empty transcript:
+		// returning a blank "OK" here is what hid the integer-loop bug. Surface
+		// it as transient so the caller retries.
+		return nil, fmt.Errorf("%w: finish_reason=%s output_tokens=%d: %v",
+			ErrDegenerateOutput, finishReason(resp), out, perr)
 	}
 
 	return &Result{
@@ -139,6 +157,20 @@ func orMIME(m string) string {
 		return "audio/wav"
 	}
 	return m
+}
+
+// maxOutputTokens sizes the reply budget to the segment window.
+func maxOutputTokens(seg Segment) int32 {
+	secs := max((seg.EndMs-seg.StartMs+999)/1000, 1)
+	return int32(outputTokensBase + outputTokensPerSecond*secs)
+}
+
+// finishReason returns the first candidate's finish reason, or "" when absent.
+func finishReason(resp *genai.GenerateContentResponse) genai.FinishReason {
+	if resp == nil || len(resp.Candidates) == 0 || resp.Candidates[0] == nil {
+		return ""
+	}
+	return resp.Candidates[0].FinishReason
 }
 
 // usageTokens pulls Gemini's prompt/candidate token counts from the response,
@@ -171,7 +203,18 @@ func promptText(languageHint string) string {
 }
 
 // responseSchema is the structured-output schema constraining Gemini's reply.
-func responseSchema() *genai.Schema {
+//
+// The integer offsets MUST carry minimum/maximum bounds: an unbounded integer
+// lets constrained decoding emit digits forever, and Gemini 3 models fall into
+// exactly that loop ("start_ms": 6000000…) until the token cap, on clean
+// speech. Bounding them to the window length also keeps offsets in range. The
+// timestamps are ordered (and required) ahead of the text so the model commits
+// to the span before transcribing it.
+func responseSchema(seg Segment) *genai.Schema {
+	windowMs := float64(max(seg.EndMs-seg.StartMs, 0))
+	offset := func() *genai.Schema {
+		return &genai.Schema{Type: genai.TypeInteger, Minimum: genai.Ptr(0.0), Maximum: genai.Ptr(windowMs)}
+	}
 	return &genai.Schema{
 		Type: genai.TypeObject,
 		Properties: map[string]*genai.Schema{
@@ -181,20 +224,24 @@ func responseSchema() *genai.Schema {
 				Items: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
+						"start_ms":   offset(),
+						"end_ms":     offset(),
 						"text":       {Type: genai.TypeString},
-						"start_ms":   {Type: genai.TypeInteger},
-						"end_ms":     {Type: genai.TypeInteger},
-						"confidence": {Type: genai.TypeNumber},
-						"language":   {Type: genai.TypeString},
 						"is_speech":  {Type: genai.TypeBoolean},
+						"language":   {Type: genai.TypeString},
+						"confidence": {Type: genai.TypeNumber, Minimum: genai.Ptr(-1.0), Maximum: genai.Ptr(1.0)},
 					},
-					Required: []string{"text", "is_speech"},
+					PropertyOrdering: utteranceFields,
+					Required:         utteranceFields,
 				},
 			},
 		},
-		Required: []string{"detected_language", "utterances"},
+		PropertyOrdering: []string{"detected_language", "utterances"},
+		Required:         []string{"detected_language", "utterances"},
 	}
 }
+
+var utteranceFields = []string{"start_ms", "end_ms", "text", "is_speech", "language", "confidence"}
 
 // modelReply is the shape parseModelJSON decodes Gemini's JSON into.
 type modelReply struct {

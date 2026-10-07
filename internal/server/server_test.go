@@ -94,6 +94,7 @@ func TestMapTranscribeErr(t *testing.T) {
 		want codes.Code
 	}{
 		{"unavailable key", transcribe.ErrUnavailable, codes.Unavailable},
+		{"degenerate reply", fmt.Errorf("%w: output_tokens=9999", transcribe.ErrDegenerateOutput), codes.Unavailable},
 		{"deadline", fmt.Errorf("wrap: %w", context.DeadlineExceeded), codes.DeadlineExceeded},
 		{"canceled", fmt.Errorf("wrap: %w", context.Canceled), codes.Canceled},
 		{"gemini 429", genai.APIError{Code: 429, Message: "rate limited"}, codes.ResourceExhausted},
