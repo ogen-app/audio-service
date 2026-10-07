@@ -258,6 +258,47 @@ type modelUtterance struct {
 	IsSpeech   *bool    `json:"is_speech"`
 }
 
+// UnmarshalJSON decodes an utterance with lenient timestamps: a start_ms/end_ms
+// that is not a representable integer (e.g. an overflowing digit run) decodes
+// as missing, so rebaseUtterances falls back to the segment window bounds for
+// it instead of the whole reply failing to parse.
+func (u *modelUtterance) UnmarshalJSON(b []byte) error {
+	var w struct {
+		Text       string          `json:"text"`
+		StartMs    json.RawMessage `json:"start_ms"`
+		EndMs      json.RawMessage `json:"end_ms"`
+		Confidence *float32        `json:"confidence"`
+		Language   string          `json:"language"`
+		IsSpeech   *bool           `json:"is_speech"`
+	}
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	*u = modelUtterance{
+		Text:       w.Text,
+		StartMs:    lenientMs(w.StartMs),
+		EndMs:      lenientMs(w.EndMs),
+		Confidence: w.Confidence,
+		Language:   w.Language,
+		IsSpeech:   w.IsSpeech,
+	}
+	return nil
+}
+
+// lenientMs parses a millisecond offset, returning nil for anything that is not
+// an integer fitting in int64 (absent, null, overflowing, fractional, a string).
+func lenientMs(raw json.RawMessage) *int64 {
+	var n json.Number
+	if len(raw) == 0 || json.Unmarshal(raw, &n) != nil {
+		return nil
+	}
+	v, err := n.Int64()
+	if err != nil {
+		return nil
+	}
+	return &v
+}
+
 // parseModelJSON decodes the model's JSON reply, tolerating markdown code fences
 // some models still wrap around JSON despite responseMIMEType=application/json.
 func parseModelJSON(s string) (*modelReply, error) {

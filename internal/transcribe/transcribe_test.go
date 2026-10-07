@@ -172,11 +172,28 @@ func TestResponseSchema_BoundsOffsetsToWindow(t *testing.T) {
 	}
 }
 
-func TestParseModelJSON_RejectsDigitLoop(t *testing.T) {
-	// The shape a looping model produced in production: an integer overflowing
-	// int64. It must be a parse error (-> ErrDegenerateOutput), not a value.
-	reply := `{"detected_language":"en","utterances":[{"text":"x","is_speech":true,"start_ms":6000000000000000000000000000}]}`
+func TestParseModelJSON_GarbledTimestampFallsBackToWindow(t *testing.T) {
+	// An overflowing offset (the digit-loop shape) in an otherwise complete
+	// reply keeps the text and falls back to the segment window for that bound.
+	reply := `{"detected_language":"en","utterances":[{"start_ms":6000000000000000000000000000,"end_ms":3280,"text":"x","is_speech":true}]}`
+	r, err := parseModelJSON(reply)
+	if err != nil {
+		t.Fatalf("garbled timestamp must not fail the reply: %v", err)
+	}
+	if r.Utterances[0].StartMs != nil {
+		t.Fatalf("overflowing start_ms must decode as missing, got %d", *r.Utterances[0].StartMs)
+	}
+	seg := Segment{StartMs: 10_000, EndMs: 28_356}
+	got := rebaseUtterances(r.Utterances, seg)
+	if got[0].Text != "x" || got[0].StartMs != 10_000 || got[0].EndMs != 13_280 {
+		t.Errorf("rebased = %+v, want text x at 10000..13280", got[0])
+	}
+}
+
+func TestParseModelJSON_TruncatedReplyIsError(t *testing.T) {
+	// A reply cut off mid-loop (token cap) is unusable, not a garbled timestamp.
+	reply := `{"detected_language":"en","utterances":[{"start_ms":60000000000000000`
 	if _, err := parseModelJSON(reply); err == nil {
-		t.Fatal("overflowing start_ms must fail to parse")
+		t.Fatal("truncated reply must fail to parse")
 	}
 }
