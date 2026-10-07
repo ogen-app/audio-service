@@ -171,6 +171,36 @@ func TestReleaseWorker_ScavengesOnDrainToIdle(t *testing.T) {
 	}
 }
 
+func TestHold_DefersScavengePastWorkerRelease(t *testing.T) {
+	scavenged := make(chan struct{}, 4)
+	e := &Engine{
+		sem:            make(chan struct{}, 4),
+		scavengeOnIdle: true,
+		scavengeFn:     func() { scavenged <- struct{}{} },
+	}
+	release := e.Hold()
+	e.sem <- struct{}{}
+	e.active.Add(1)
+
+	e.releaseWorker() // segment cut done; the Gemini call still holds the engine
+	select {
+	case <-scavenged:
+		t.Fatal("scavenged while a hold was still active")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	release() // idempotent: must not drive active negative
+	select {
+	case <-scavenged:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected a scavenge after the hold was released")
+	}
+	if n := e.active.Load(); n != 0 {
+		t.Fatalf("active = %d after release, want 0", n)
+	}
+}
+
 func TestScavenge_SingleFlight(t *testing.T) {
 	started := make(chan struct{}, 4)
 	release := make(chan struct{})

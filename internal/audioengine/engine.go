@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -152,9 +153,27 @@ func (e *Engine) acquire(ctx context.Context) error {
 // the pool to zero triggers it, so a steady stream of work scavenges at most
 // once per quiet gap rather than after every call.
 func (e *Engine) releaseWorker() {
-	idle := e.active.Add(-1) == 0
 	<-e.sem
-	if idle && e.scavengeOnIdle {
+	e.endActive()
+}
+
+// Hold marks the engine busy for work that happens outside a worker slot — the
+// Gemini round-trip after a SegmentCut — and returns the matching release. The
+// segment WAV and its base64 JSON request body are the largest Go allocations
+// this service makes, and they live after SegmentCut has freed its slot; without
+// the hold the pool drains to idle (and scavenges) before that memory is even
+// allocated, and nothing returns it to the OS afterwards. Call the returned func
+// exactly once, after the last large buffer is dropped.
+func (e *Engine) Hold() (release func()) {
+	e.active.Add(1)
+	var once sync.Once
+	return func() { once.Do(e.endActive) }
+}
+
+// endActive drops one in-flight operation and, when it was the last, kicks off
+// an idle scavenge.
+func (e *Engine) endActive() {
+	if e.active.Add(-1) == 0 && e.scavengeOnIdle {
 		e.scavenge()
 	}
 }
