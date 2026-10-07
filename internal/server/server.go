@@ -137,6 +137,12 @@ func (s *Server) TranscribeSegment(ctx context.Context, req *audiov1.TranscribeS
 		return nil, status.Error(codes.InvalidArgument, "model is required (no default configured)")
 	}
 
+	// Keep the engine busy across the cut AND the Gemini call so the idle
+	// scavenge runs after the segment WAV / request body are garbage, not
+	// between the cut and the upload.
+	release := s.engine.Hold()
+	defer release()
+
 	// Cut the segment from the normalized derivative (ffmpeg range-read).
 	seg, err := s.engine.SegmentCut(ctx, url, req.GetStartMs(), req.GetEndMs())
 	if err != nil {
