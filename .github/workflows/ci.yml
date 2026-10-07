@@ -84,6 +84,34 @@ jobs:
             exit 1
           fi
 
+  # Build the image (without pushing) on PRs so a broken ffmpeg source build in
+  # the Dockerfile surfaces before merge, and smoke-test the built binaries.
+  image:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: audio-service:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-test ffmpeg/ffprobe
+        run: |
+          docker run --rm --entrypoint sh audio-service:ci -c '
+            ffmpeg -hide_banner -version | head -1 &&
+            ffprobe -hide_banner -version | head -1 &&
+            ffmpeg -hide_banner -encoders | grep -q libopus &&
+            ffmpeg -hide_banner -filters | grep -q silencedetect &&
+            ffmpeg -hide_banner -protocols | grep -q https'
+
   build-push:
     runs-on: ubuntu-latest
     # Gate the image on tests: this job won't start until both go and proto

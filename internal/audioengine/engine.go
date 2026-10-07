@@ -251,11 +251,15 @@ func classifyProbeErr(stderr string, runErr error) error {
 	// garbage input — so match the common demuxer content-failures too. A demuxer
 	// that can't read a frame, or can't seek within the object, is looking at
 	// non-media data; here a seek failure is a content signal, not transport,
-	// because the presigned object URLs are range-capable.
+	// because the presigned object URLs are range-capable. The image's ffmpeg is
+	// audio-only, so non-audio bytes behind an audio extension (an image saved as
+	// .mp3) fail in that extension's demuxer rather than being identified as what
+	// they are — e.g. the mp3 demuxer finding no MPEG audio frames.
 	invalid := []string{
 		"invalid data found", "moov atom not found", "could not find codec parameters",
 		"unknown format", "header missing",
 		"failed to read frame size", "could not seek to",
+		"failed to find two consecutive mpeg audio frames",
 	}
 	for _, m := range invalid {
 		if strings.Contains(s, m) {
