@@ -55,7 +55,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Authenticated, so resolving the buf release doesn't hit the shared
+      # runner IP's anonymous API rate limit.
       - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ github.token }}
 
       # Verify the committed stubs under gen/ are in sync with the pinned
       # buf.build/ogen-app/proto contract (CON-220) — a drifted checkout means
